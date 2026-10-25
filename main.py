@@ -28,8 +28,13 @@ async def get_db_client():
     try:
         url, token = validate_turso_config()
         logger.info("Intentando conectar a Turso: %s", url)
-        # Se asegura el uso del cliente asíncrono para HTTP/WebSockets
-        return libsql_client.create_client(url=url, auth_token=token)
+        
+        # Compatibilidad según la versión instanciada de libsql-client
+        if hasattr(libsql_client, "create_client_http"):
+            return libsql_client.create_client_http(url=url, auth_token=token)
+        else:
+            return libsql_client.create_client(url=url, auth_token=token)
+
     except Exception as e:
         logger.exception("Error creando cliente de Turso")
         raise RuntimeError(f"No se pudo crear el cliente de Turso: {e}") from e
@@ -115,8 +120,7 @@ async def startup_db():
         logger.info("Base de datos inicializada correctamente")
 
     except Exception as e:
-        logger.exception("ERROR EN STARTUP_DB: %s", e)
-        raise
+        logger.error(f"⚠️ Error inicializando la base de datos en startup: {e}")
     finally:
         if client is not None:
             await client.close()
