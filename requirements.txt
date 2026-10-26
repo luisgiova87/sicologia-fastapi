@@ -2,9 +2,4 @@ fastapi==0.110.0
 uvicorn==0.28.0
 libsql-experimental==0.0.34
 pydantic==2.6.4
-requests==2.31.0
-pandas==2.2.1
-openpyxl==3.1.2
-streamlit==1.32.2
-reportlab==4.1.0
 python-dotenv==1.0.1
