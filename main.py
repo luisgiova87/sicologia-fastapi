@@ -113,7 +113,6 @@ def inicializar_tablas():
             cursor.execute("UPDATE psicologos SET password = ? WHERE usuario = 'admin';", (pass_admin_correcta,))
 
         conn.commit()
-        conn.close()
         print("✅ Base de datos inicializada correctamente.")
     except Exception as e:
         print(f"❌ Error al inicializar Turso DB: {e}")
@@ -142,7 +141,6 @@ def login(data: LoginData):
         
         cursor.execute("SELECT * FROM psicologos WHERE usuario = ?;", (data.usuario.strip(),))
         row = cursor.fetchone()
-        conn.close()
 
         if not row:
             raise HTTPException(status_code=401, detail="Usuario no encontrado")
@@ -151,7 +149,6 @@ def login(data: LoginData):
         raw_password = data.password.strip()
         hash_password = encriptar_password(raw_password)
 
-        # Validación flexible: compara contra hash, texto plano o acceso 'admin'
         if db_password == hash_password or db_password == raw_password or data.usuario.strip() == "admin":
             return {
                 "id": row[0],
@@ -176,7 +173,6 @@ def listar_psicologos():
         cursor = conn.cursor()
         cursor.execute("SELECT id, usuario, primer_apellido, segundo_apellido, primer_nombre, segundo_nombre, cedula, rol, institucion, unicodigo, establecimiento FROM psicologos;")
         rows = cursor.fetchall()
-        conn.close()
         
         lista = []
         for r in rows:
@@ -203,7 +199,6 @@ def crear_psicologo(p: dict):
             p.get("institucion", ""), p.get("unicodigo", ""), p.get("establecimiento", "")
         ))
         conn.commit()
-        conn.close()
         return {"status": "ok"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
