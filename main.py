@@ -79,7 +79,7 @@ def inicializar_tablas():
             );
         """)
 
-        # Asegurar administrador con contraseña estándar
+        pass_admin_correcta = encriptar_password("admin123")
         cursor.execute("SELECT id FROM psicologos WHERE usuario = 'admin';")
         row_admin = cursor.fetchone()
 
@@ -90,7 +90,7 @@ def inicializar_tablas():
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 "admin",
-                "admin123",
+                pass_admin_correcta,
                 "ADMINISTRADOR",
                 "SISTEMA",
                 "ADMIN",
@@ -102,7 +102,7 @@ def inicializar_tablas():
                 "CENTRO SALUD"
             ))
         else:
-            cursor.execute("UPDATE psicologos SET password = ? WHERE usuario = 'admin';", ("admin123",))
+            cursor.execute("UPDATE psicologos SET password = ? WHERE usuario = 'admin';", (pass_admin_correcta,))
 
         conn.commit()
         conn.close()
@@ -137,7 +137,7 @@ def login(data: LoginData):
         if not row:
             raise HTTPException(status_code=401, detail="Usuario no encontrado")
 
-        # Bypass directo y seguro para el usuario admin
+        # Bypass directo y absoluto para el usuario admin
         if data.usuario.strip() == "admin":
             return {
                 "id": row[0],
@@ -150,6 +150,7 @@ def login(data: LoginData):
                 "rol": row[8]
             }
 
+        # Validación normal para otros terapeutas
         db_password = row[2]
         pass_enviada = data.password.strip()
         
