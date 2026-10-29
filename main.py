@@ -5,14 +5,14 @@ import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime, timedelta
 from typing import Optional, List
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import libsql_client
 
 app = FastAPI(title="API Sistema Clínico de Psicología")
 
-# Permitir solicitudes CORS desde la app de Streamlit
+# Permitir solicitudes CORS desde Streamlit
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,20 +21,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- CONFIGURACIÓN DE CONEXIÓN A TURSO DB ---
+# --- CONFIGURACIÓN TURSO DB ---
 TURSO_URL = os.getenv("TURSO_DATABASE_URL", "").replace("https://", "libsql://")
 TURSO_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
 
-# Configuración de correo para recuperación (Gmail SMTP)
+# Configuración SMTP
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
-SMTP_USER = os.getenv("SMTP_USER", "")  # Correo remitente
-SMTP_PASS = os.getenv("SMTP_PASS", "")  # Contraseña de aplicación de Google
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASS = os.getenv("SMTP_PASS", "")
 
 def obtener_conexion():
     if not TURSO_URL or not TURSO_TOKEN:
         raise HTTPException(
-            status_code=500, detail="Variables de entorno de Turso no configuradas."
+            status_code=500, detail="Variables de entorno TURSO_DATABASE_URL o TURSO_AUTH_TOKEN no configuradas en Vercel."
         )
     return libsql_client.create_client_sync(url=TURSO_URL, auth_token=TURSO_TOKEN)
 
@@ -43,22 +43,12 @@ def encriptar_password(password: str) -> str:
     return hashlib.sha256(f"{password}{sal_sistema}".encode('utf-8')).hexdigest()
 
 def enviar_correo_codigo(correo_destino: str, codigo: str):
-    """Función auxiliar protegida para enviar el código por correo sin tumbar el servidor."""
     if not SMTP_USER or not SMTP_PASS:
-        print(f"⚠️ SMTP no configurado. Código generado para {correo_destino}: {codigo}")
+        print(f"SMTP no configurado. Código para {correo_destino}: {codigo}")
         return
 
     asunto = "Código de Recuperación de Contraseña - Sistema Clínico"
-    cuerpo = f"""
-    Hola,
-
-    Has solicitado restablecer tu contraseña en el Sistema Clínico de Psicología.
-    Tu código de seguridad temporal es:
-
-    🔑  {codigo}  🔑
-
-    Este código vencerá en 15 minutos. Si no solicitaste este cambio, ignora este mensaje.
-    """
+    cuerpo = f"Hola,\n\nTu código de seguridad temporal es: {codigo}\n\nVencerá en 15 minutos."
     
     msg = MIMEText(cuerpo, "plain", "utf-8")
     msg["Subject"] = asunto
@@ -66,13 +56,13 @@ def enviar_correo_codigo(correo_destino: str, codigo: str):
     msg["To"] = correo_destino
 
     try:
-        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=10) as server:
+        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=5) as server:
             server.login(SMTP_USER, SMTP_PASS)
             server.sendmail(SMTP_USER, [correo_destino], msg.as_string())
     except Exception as e:
-        print(f"⚠️ Error al enviar correo por SMTP: {e}")
+        print(f"Error SMTP: {e}")
 
-# --- MODELOS DE DATOS (PYDANTIC) ---
+# --- MODELOS ---
 class LoginRequest(BaseModel):
     usuario: str
     password: str
@@ -147,103 +137,103 @@ class SesionCreate(BaseModel):
     notas_evolucion: Optional[str] = ""
     proxima_cita: Optional[str] = ""
 
-# --- INICIALIZACIÓN DE LA BASE DE DATOS ---
+# --- ENDPOINTS BÁSICOS ---
+@app.get("/")
+def home():
+    return {"status": "ok", "mensaje": "API del Sistema Clínico Activa"}
+
 @app.get("/api/init-db")
 def inicializar_tablas():
-    client = obtener_conexion()
-    
-    # Crear Tabla Psicólogos
-    client.execute("""
-    CREATE TABLE IF NOT EXISTS psicologos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        usuario TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        primer_apellido TEXT NOT NULL,
-        segundo_apellido TEXT,
-        primer_nombre TEXT NOT NULL,
-        segundo_nombre TEXT,
-        cedula TEXT UNIQUE NOT NULL,
-        rol TEXT DEFAULT 'psicologo',
-        institucion TEXT DEFAULT 'MSP',
-        unicodigo TEXT DEFAULT '0000',
-        establecimiento TEXT DEFAULT 'CENTRO SALUD',
-        email TEXT DEFAULT '',
-        estado_licencia TEXT DEFAULT 'activo',
-        fecha_expiracion TEXT DEFAULT '2026-12-31',
-        limite_pacientes INTEGER DEFAULT 100
-    );
-    """)
-
-    # Crear Tabla Pacientes
-    client.execute("""
-    CREATE TABLE IF NOT EXISTS pacientes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        psicologo_id INTEGER NOT NULL,
-        primer_apellido TEXT NOT NULL,
-        segundo_apellido TEXT,
-        primer_nombre TEXT NOT NULL,
-        segundo_nombre TEXT,
-        sexo TEXT NOT NULL,
-        edad INTEGER NOT NULL,
-        historia_clinica TEXT NOT NULL,
-        numero_archivo TEXT NOT NULL,
-        FOREIGN KEY (psicologo_id) REFERENCES psicologos(id)
-    );
-    """)
-
-    # Crear Tabla Sesiones
-    client.execute("""
-    CREATE TABLE IF NOT EXISTS sesiones (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        paciente_id INTEGER NOT NULL,
-        psicologo_id INTEGER NOT NULL,
-        fecha TEXT NOT NULL,
-        hora TEXT NOT NULL,
-        tipo_consulta TEXT NOT NULL,
-        motivo_consulta TEXT NOT NULL,
-        antecedentes_personales TEXT,
-        antecedentes_familiares TEXT,
-        problema_actual TEXT NOT NULL,
-        diagnosticos TEXT,
-        pruebas TEXT,
-        plan_tratamiento TEXT,
-        notas_evolucion TEXT,
-        proxima_cita TEXT,
-        FOREIGN KEY (paciente_id) REFERENCES pacientes(id),
-        FOREIGN KEY (psicologo_id) REFERENCES psicologos(id)
-    );
-    """)
-
-    # Crear Tabla para Códigos de Recuperación de Contraseña
-    client.execute("""
-    CREATE TABLE IF NOT EXISTS codigos_recuperacion (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        usuario TEXT NOT NULL,
-        codigo TEXT NOT NULL,
-        expiracion TEXT NOT NULL
-    );
-    """)
-
-    # Insertar Usuario Administrador Inicial si no existe
-    res = client.execute("SELECT COUNT(*) FROM psicologos WHERE usuario = 'admin';")
-    if res.rows[0][0] == 0:
-        pass_hash = encriptar_password("admin123")
-        client.execute("""
-        INSERT INTO psicologos 
-        (usuario, password, primer_apellido, segundo_apellido, primer_nombre, segundo_nombre, cedula, rol, institucion, unicodigo, establecimiento, email, estado_licencia, fecha_expiracion, limite_pacientes)
-        VALUES ('admin', ?, 'ADMINISTRADOR', 'SISTEMA', 'ADMIN', '', '0000000000', 'admin', 'MSP', '0000', 'CENTRO SALUD', 'admin@sistema.ec', 'activo', '2099-12-31', 9999);
-        """, [pass_hash])
-
-    return {"status": "ok", "mensaje": "Base de datos y usuario admin inicializados correctamente"}
-
-@app.on_event("startup")
-def startup_event():
     try:
-        inicializar_tablas()
-    except Exception as e:
-        print("Error en startup:", e)
+        client = obtener_conexion()
+        
+        # Tabla psicologos
+        client.execute("""
+        CREATE TABLE IF NOT EXISTS psicologos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            primer_apellido TEXT NOT NULL,
+            segundo_apellido TEXT,
+            primer_nombre TEXT NOT NULL,
+            segundo_nombre TEXT,
+            cedula TEXT UNIQUE NOT NULL,
+            rol TEXT DEFAULT 'psicologo',
+            institucion TEXT DEFAULT 'MSP',
+            unicodigo TEXT DEFAULT '0000',
+            establecimiento TEXT DEFAULT 'CENTRO SALUD',
+            email TEXT DEFAULT '',
+            estado_licencia TEXT DEFAULT 'activo',
+            fecha_expiracion TEXT DEFAULT '2026-12-31',
+            limite_pacientes INTEGER DEFAULT 100
+        );
+        """)
 
-# --- AUTENTICACIÓN Y LOGIN ---
+        # Tabla pacientes
+        client.execute("""
+        CREATE TABLE IF NOT EXISTS pacientes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            psicologo_id INTEGER NOT NULL,
+            primer_apellido TEXT NOT NULL,
+            segundo_apellido TEXT,
+            primer_nombre TEXT NOT NULL,
+            segundo_nombre TEXT,
+            sexo TEXT NOT NULL,
+            edad INTEGER NOT NULL,
+            historia_clinica TEXT NOT NULL,
+            numero_archivo TEXT NOT NULL,
+            FOREIGN KEY (psicologo_id) REFERENCES psicologos(id)
+        );
+        """)
+
+        # Tabla sesiones
+        client.execute("""
+        CREATE TABLE IF NOT EXISTS sesiones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            paciente_id INTEGER NOT NULL,
+            psicologo_id INTEGER NOT NULL,
+            fecha TEXT NOT NULL,
+            hora TEXT NOT NULL,
+            tipo_consulta TEXT NOT NULL,
+            motivo_consulta TEXT NOT NULL,
+            antecedentes_personales TEXT,
+            antecedentes_familiares TEXT,
+            problema_actual TEXT NOT NULL,
+            diagnosticos TEXT,
+            pruebas TEXT,
+            plan_tratamiento TEXT,
+            notas_evolucion TEXT,
+            proxima_cita TEXT,
+            FOREIGN KEY (paciente_id) REFERENCES pacientes(id),
+            FOREIGN KEY (psicologo_id) REFERENCES psicologos(id)
+        );
+        """)
+
+        # Tabla codigos_recuperacion
+        client.execute("""
+        CREATE TABLE IF NOT EXISTS codigos_recuperacion (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT NOT NULL,
+            codigo TEXT NOT NULL,
+            expiracion TEXT NOT NULL
+        );
+        """)
+
+        # Admin por defecto
+        res = client.execute("SELECT COUNT(*) FROM psicologos WHERE usuario = 'admin';")
+        if res.rows[0][0] == 0:
+            pass_hash = encriptar_password("admin123")
+            client.execute("""
+            INSERT INTO psicologos 
+            (usuario, password, primer_apellido, segundo_apellido, primer_nombre, segundo_nombre, cedula, rol, institucion, unicodigo, establecimiento, email, estado_licencia, fecha_expiracion, limite_pacientes)
+            VALUES ('admin', ?, 'ADMINISTRADOR', 'SISTEMA', 'ADMIN', '', '0000000000', 'admin', 'MSP', '0000', 'CENTRO SALUD', 'admin@sistema.ec', 'activo', '2099-12-31', 9999);
+            """, [pass_hash])
+
+        return {"status": "ok", "mensaje": "Base de datos y usuario admin inicializados correctamente"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al inicializar la base de datos: {str(e)}")
+
+# --- AUTENTICACIÓN Y RUTAS ---
 @app.post("/login")
 def login(req: LoginRequest):
     client = obtener_conexion()
@@ -269,7 +259,6 @@ def login(req: LoginRequest):
         "email": r[9]
     }
 
-# --- RECUPERACIÓN DE CONTRASEÑA POR CORREO ---
 @app.post("/solicitar-recuperacion")
 def solicitar_recuperacion(req: SolicitarRecuperacionRequest):
     client = obtener_conexion()
@@ -293,7 +282,7 @@ def solicitar_recuperacion(req: SolicitarRecuperacionRequest):
     )
 
     enviar_correo_codigo(email, codigo)
-    return {"status": "ok", "mensaje": f"Código enviado al correo registrado (***{email[-10:] if len(email) > 10 else email})"}
+    return {"status": "ok", "mensaje": f"Código enviado al correo registrado"}
 
 @app.post("/restablecer-password")
 def restablecer_password(req: RestablecerPasswordRequest):
@@ -308,15 +297,11 @@ def restablecer_password(req: RestablecerPasswordRequest):
         raise HTTPException(status_code=400, detail="Código inválido o expirado")
 
     nueva_pass_hash = encriptar_password(req.nueva_password)
-    client.execute(
-        "UPDATE psicologos SET password = ? WHERE usuario = ?;",
-        [nueva_pass_hash, req.usuario]
-    )
+    client.execute("UPDATE psicologos SET password = ? WHERE usuario = ?;", [nueva_pass_hash, req.usuario])
     client.execute("DELETE FROM codigos_recuperacion WHERE usuario = ?;", [req.usuario])
 
     return {"status": "ok", "mensaje": "Contraseña restablecida con éxito"}
 
-# --- RUTA DE RESCATE ADMINISTRADOR ---
 @app.get("/api/rescue-admin")
 def rescue_admin(clave_secreta: str):
     if clave_secreta != "MI_CLAVE_DE_RESCATE_2026":
@@ -324,13 +309,9 @@ def rescue_admin(clave_secreta: str):
 
     client = obtener_conexion()
     nueva_pass_hash = encriptar_password("admin123")
-    client.execute(
-        "UPDATE psicologos SET password = ? WHERE usuario = 'admin';",
-        [nueva_pass_hash]
-    )
+    client.execute("UPDATE psicologos SET password = ? WHERE usuario = 'admin';", [nueva_pass_hash])
     return {"status": "ok", "mensaje": "Contraseña de admin restablecida a 'admin123' exitosamente"}
 
-# --- GESTIÓN DE TERAPEUTAS / PSICÓLOGOS ---
 @app.get("/psicologos")
 def listar_psicologos():
     client = obtener_conexion()
@@ -388,7 +369,6 @@ def cambiar_password(psi_id: int, data: PasswordChange):
     client.execute("UPDATE psicologos SET password = ? WHERE id = ?;", [data.password_nueva, psi_id])
     return {"status": "ok", "mensaje": "Contraseña actualizada exitosamente"}
 
-# --- GESTIÓN DE PACIENTES ---
 @app.get("/pacientes/todos")
 def listar_todos_pacientes():
     client = obtener_conexion()
@@ -445,7 +425,6 @@ def eliminar_paciente(pac_id: int):
     client.execute("DELETE FROM pacientes WHERE id = ?;", [pac_id])
     return {"status": "ok", "mensaje": "Paciente y sus sesiones eliminados"}
 
-# --- GESTIÓN DE SESIONES / EVOLUCIONES ---
 @app.get("/sesiones")
 def listar_sesiones(paciente_id: int):
     client = obtener_conexion()
