@@ -25,7 +25,7 @@ def inicializar_tablas():
         conn = obtener_conexion()
         cursor = conn.cursor()
 
-        # 1. Tabla Psicólogos con campos de Licencia
+        # 1. Tabla Psicólogos / Terapeutas
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS psicologos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,7 +46,7 @@ def inicializar_tablas():
             );
         """)
 
-        # Migrar columnas si no existen
+        # Migraciones
         cursor.execute("PRAGMA table_info(psicologos);")
         columnas = [row[1] for row in cursor.fetchall()]
         if "estado_licencia" not in columnas:
@@ -96,7 +96,7 @@ def inicializar_tablas():
             );
         """)
 
-        # Usuario admin por defecto
+        # Admin por defecto
         pass_admin_correcta = encriptar_password("admin123")
         cursor.execute("SELECT id FROM psicologos WHERE usuario = 'admin';")
         row_admin = cursor.fetchone()
@@ -124,7 +124,7 @@ def startup():
 def endpoint_init_db():
     try:
         inicializar_tablas()
-        return {"status": "ok", "mensaje": "Base de datos y licencias inicializadas correctamente"}
+        return {"status": "ok", "mensaje": "Base de datos inicializada correctamente"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -185,6 +185,7 @@ def login(data: LoginData):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# --- ENDPOINTS PSICOLOGOS ---
 @app.get("/psicologos")
 def listar_psicologos():
     try:
@@ -270,6 +271,7 @@ def actualizar_psicologo(psi_id: int, p: dict):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+# --- ENDPOINTS PACIENTES ---
 @app.get("/pacientes")
 def listar_pacientes(psicologo_id: int, filtro: str = ""):
     try:
@@ -302,6 +304,27 @@ def listar_pacientes(psicologo_id: int, filtro: str = ""):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/pacientes/todos")
+def listar_todos_pacientes():
+    try:
+        conn = obtener_conexion()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT p.id, p.primer_apellido, p.segundo_apellido, p.primer_nombre, p.segundo_nombre, p.historia_clinica, p.numero_archivo, psi.usuario as terapeuta
+            FROM pacientes p
+            JOIN psicologos psi ON p.psicologo_id = psi.id;
+        """)
+        rows = cursor.fetchall()
+        lista = []
+        for r in rows:
+            lista.append({
+                "id": r[0], "primer_apellido": r[1], "segundo_apellido": r[2], "primer_nombre": r[3],
+                "segundo_nombre": r[4], "historia_clinica": r[5], "numero_archivo": r[6], "terapeuta": r[7]
+            })
+        return {"pacientes": lista}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/pacientes")
 def crear_paciente(p: dict):
     try:
@@ -309,7 +332,6 @@ def crear_paciente(p: dict):
         conn = obtener_conexion()
         cursor = conn.cursor()
 
-        # Verificar límite de pacientes
         cursor.execute("SELECT limite_pacientes, rol FROM psicologos WHERE id = ?;", (psi_id,))
         row_psi = cursor.fetchone()
         
@@ -318,7 +340,7 @@ def crear_paciente(p: dict):
             cursor.execute("SELECT COUNT(*) FROM pacientes WHERE psicologo_id = ?;", (psi_id,))
             conteo = cursor.fetchone()[0]
             if conteo >= limite:
-                raise HTTPException(status_code=403, detail=f"Ha alcanzado el límite de {limite} pacientes.")
+                raise HTTPException(status_code=403, detail=f"Ha alcanzado el límite de {limite} pacientes de su suscripción.")
 
         cursor.execute("""
             INSERT INTO pacientes (psicologo_id, primer_apellido, segundo_apellido, primer_nombre, segundo_nombre, sexo, edad, historia_clinica, numero_archivo)
@@ -334,6 +356,92 @@ def crear_paciente(p: dict):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@app.put("/pacientes/{paciente_id}")
+def actualizar_paciente(paciente_id: int, p: dict):
+    try:
+        conn = obtener_conexion()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE pacientes 
+            SET primer_apellido = ?, segundo_apellido = ?, primer_nombre = ?, segundo_nombre = ?, sexo = ?, edad = ?, historia_clinica = ?, numero_archivo = ?
+            WHERE id = ?;
+        """, (
+            p.get("primer_apellido"), p.get("segundo_apellido", ""), p.get("primer_nombre"),
+            p.get("segundo_nombre", ""), p.get("sexo"), p.get("edad"), p.get("historia_clinica"),
+            p.get("numero_archivo"), paciente_id
+        ))
+        conn.commit()
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.delete("/pacientes/{paciente_id}")
+def eliminar_paciente(paciente_id: int):
+    try:
+        conn = obtener_conexion()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM sesiones WHERE paciente_id = ?;", (paciente_id,))
+        cursor.execute("DELETE FROM pacientes WHERE id = ?;", (paciente_id,))
+        conn.commit()
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# --- ENDPOINTS SESIONES ---
+@app.get("/sesiones")
+def listar_sesiones(paciente_id: int):
+    try:
+        conn = obtener_conexion()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, paciente_id, psicologo_id, fecha, hora, tipo_consulta, motivo_consulta, antecedentes_personales, antecedentes_familiares, problema_actual, diagnosticos, pruebas, plan_tratamiento, notas_evolucion, proxima_cita 
+            FROM sesiones 
+            WHERE paciente_id = ? ORDER BY id ASC;
+        """, (paciente_id,))
+        rows = cursor.fetchall()
+        lista = []
+        for r in rows:
+            lista.append({
+                "id": r[0], "paciente_id": r[1], "psicologo_id": r[2], "fecha": r[3], "hora": r[4],
+                "tipo_consulta": r[5], "motivo_consulta": r[6], "antecedentes_personales": r[7],
+                "antecedentes_familiares": r[8], "problema_actual": r[9], "diagnosticos": r[10],
+                "pruebas": r[11], "plan_tratamiento": r[12], "notas_evolucion": r[13], "proxima_cita": r[14]
+            })
+        return {"sesiones": lista}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/sesiones")
+def crear_sesion(s: dict):
+    try:
+        conn = obtener_conexion()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO sesiones (paciente_id, psicologo_id, fecha, hora, tipo_consulta, motivo_consulta, antecedentes_personales, antecedentes_familiares, problema_actual, diagnosticos, pruebas, plan_tratamiento, notas_evolucion, proxima_cita)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            s.get("paciente_id"), s.get("psicologo_id"), s.get("fecha"), s.get("hora"),
+            s.get("tipo_consulta"), s.get("motivo_consulta"), s.get("antecedentes_personales", ""),
+            s.get("antecedentes_familiares", ""), s.get("problema_actual"), s.get("diagnosticos", "[]"),
+            s.get("pruebas", "[]"), s.get("plan_tratamiento", ""), s.get("notas_evolucion", ""),
+            s.get("proxima_cita", "")
+        ))
+        conn.commit()
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.delete("/sesiones/{sesion_id}")
+def eliminar_sesion(sesion_id: int):
+    try:
+        conn = obtener_conexion()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM sesiones WHERE id = ?;", (sesion_id,))
+        conn.commit()
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 @app.get("/")
 def root():
-    return {"status": "ok", "mensaje": "API de Psicología operando correctamente"}
+    return {"status": "ok", "mensaje": "API de Psicología completa y operativa"}
