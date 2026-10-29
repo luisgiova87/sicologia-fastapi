@@ -13,7 +13,7 @@ app = FastAPI()
 TURSO_URL = os.getenv("TURSO_DATABASE_URL", "")
 TURSO_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
 
-# Configuración SMTP para envío de correo
+# Configuración SMTP para envío de correo (Gmail)
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
 SMTP_USER = os.getenv("SMTP_USER", "")
@@ -234,7 +234,7 @@ def solicitar_recuperacion(data: dict):
         conn.commit()
 
         enviar_correo_codigo(email, codigo)
-        return {"status": "ok", "mensaje": f"Código enviado al correo registrado"}
+        return {"status": "ok", "mensaje": "Código enviado al correo registrado"}
     except HTTPException as he:
         raise he
     except Exception as e:
@@ -339,6 +339,19 @@ def actualizar_psicologo(psi_id: int, p: dict):
             valores.append(psi_id)
             cursor.execute(f"UPDATE psicologos SET {', '.join(campos)} WHERE id = ?;", tuple(valores))
             conn.commit()
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.delete("/psicologos/{psi_id}")
+def eliminar_psicologo(psi_id: int):
+    try:
+        conn = obtener_conexion()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM sesiones WHERE psicologo_id = ?;", (psi_id,))
+        cursor.execute("DELETE FROM pacientes WHERE psicologo_id = ?;", (psi_id,))
+        cursor.execute("DELETE FROM psicologos WHERE id = ?;", (psi_id,))
+        conn.commit()
         return {"status": "ok"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
