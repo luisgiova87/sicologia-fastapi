@@ -217,7 +217,6 @@ def actualizar_psicologo(psi_id: int, p: dict):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# CORRECCIÓN DEFINITIVA DE CAMBIO DE CONTRASEÑA
 @app.put("/psicologos/{psi_id}/password")
 def cambiar_password(psi_id: int, data: dict):
     try:
@@ -352,6 +351,7 @@ def eliminar_paciente(paciente_id: int):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+# LISTAR SESIONES ORDENADAS DESDE LA ÚLTIMA A LA MÁS ANTIGUA (ORDER BY id DESC)
 @app.get("/sesiones")
 def listar_sesiones(paciente_id: int):
     try:
@@ -360,7 +360,7 @@ def listar_sesiones(paciente_id: int):
         cursor.execute("""
             SELECT id, paciente_id, psicologo_id, fecha, hora, tipo_consulta, motivo_consulta, antecedentes_personales, antecedentes_familiares, problema_actual, diagnosticos, pruebas, plan_tratamiento, notas_evolucion, proxima_cita 
             FROM sesiones 
-            WHERE paciente_id = ? ORDER BY id ASC;
+            WHERE paciente_id = ? ORDER BY id DESC;
         """, (paciente_id,))
         rows = cursor.fetchall()
         lista = [{
@@ -393,7 +393,6 @@ def crear_sesion(s: dict):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# NUEVA RUTA PARA MODIFICAR SESIONES
 @app.put("/sesiones/{sesion_id}")
 def actualizar_sesion(sesion_id: int, s: dict):
     try:
