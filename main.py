@@ -351,7 +351,6 @@ def eliminar_paciente(paciente_id: int):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# LISTAR SESIONES ORDENADAS DESDE LA ÚLTIMA A LA MÁS ANTIGUA (ORDER BY id DESC)
 @app.get("/sesiones")
 def listar_sesiones(paciente_id: int):
     try:
