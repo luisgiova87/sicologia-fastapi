@@ -46,7 +46,7 @@ def inicializar_tablas():
             );
         """)
 
-        # Migrar columnas de licencia si la tabla ya existía sin ellas
+        # Migrar columnas si no existen
         cursor.execute("PRAGMA table_info(psicologos);")
         columnas = [row[1] for row in cursor.fetchall()]
         if "estado_licencia" not in columnas:
@@ -154,15 +154,13 @@ def login(data: LoginData):
             expiracion = row[10] or "2099-12-31"
             limite_p = row[11] if row[11] is not None else 9999
 
-            # Control de Licencia para usuarios no administradores
             if rol != "admin":
                 if estado != "activo":
-                    raise HTTPException(status_code=403, detail="Su cuenta se encuentra suspendida o inactiva. Contacte al administrador.")
-                
+                    raise HTTPException(status_code=403, detail="Su cuenta se encuentra suspendida o inactiva.")
                 try:
                     fecha_exp_obj = datetime.strptime(expiracion, "%Y-%m-%d").date()
                     if date.today() > fecha_exp_obj:
-                        raise HTTPException(status_code=403, detail=f"Su licencia de uso venció el {expiracion}. Por favor renueve su suscripción.")
+                        raise HTTPException(status_code=403, detail=f"Su licencia de uso venció el {expiracion}.")
                 except ValueError:
                     pass
 
@@ -205,6 +203,23 @@ def listar_psicologos():
                 "limite_pacientes": r[13] if r[13] is not None else 9999
             })
         return {"psicologos": lista}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/psicologos/{psi_id}")
+def obtener_psicologo_por_id(psi_id: int):
+    try:
+        conn = obtener_conexion()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, usuario, primer_apellido, segundo_apellido, primer_nombre, segundo_nombre, cedula, rol, institucion, unicodigo, establecimiento FROM psicologos WHERE id = ?;", (psi_id,))
+        r = cursor.fetchone()
+        if not r:
+            raise HTTPException(status_code=404, detail="Terapeuta no encontrado")
+        return {
+            "id": r[0], "usuario": r[1], "primer_apellido": r[2], "segundo_apellido": r[3],
+            "primer_nombre": r[4], "segundo_nombre": r[5], "cedula": r[6], "rol": r[7],
+            "institucion": r[8], "unicodigo": r[9], "establecimiento": r[10]
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -255,6 +270,38 @@ def actualizar_psicologo(psi_id: int, p: dict):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@app.get("/pacientes")
+def listar_pacientes(psicologo_id: int, filtro: str = ""):
+    try:
+        conn = obtener_conexion()
+        cursor = conn.cursor()
+        
+        if filtro and filtro.strip():
+            f = f"%{filtro.strip()}%"
+            cursor.execute("""
+                SELECT id, psicologo_id, primer_apellido, segundo_apellido, primer_nombre, segundo_nombre, sexo, edad, historia_clinica, numero_archivo 
+                FROM pacientes 
+                WHERE psicologo_id = ? AND (primer_apellido LIKE ? OR primer_nombre LIKE ? OR historia_clinica LIKE ? OR numero_archivo LIKE ?);
+            """, (psicologo_id, f, f, f, f))
+        else:
+            cursor.execute("""
+                SELECT id, psicologo_id, primer_apellido, segundo_apellido, primer_nombre, segundo_nombre, sexo, edad, historia_clinica, numero_archivo 
+                FROM pacientes 
+                WHERE psicologo_id = ? ORDER BY id DESC;
+            """, (psicologo_id,))
+
+        rows = cursor.fetchall()
+        lista = []
+        for r in rows:
+            lista.append({
+                "id": r[0], "psicologo_id": r[1], "primer_apellido": r[2], "segundo_apellido": r[3],
+                "primer_nombre": r[4], "segundo_nombre": r[5], "sexo": r[6], "edad": r[7],
+                "historia_clinica": r[8], "numero_archivo": r[9]
+            })
+        return {"pacientes": lista}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/pacientes")
 def crear_paciente(p: dict):
     try:
@@ -262,7 +309,7 @@ def crear_paciente(p: dict):
         conn = obtener_conexion()
         cursor = conn.cursor()
 
-        # Verificar limite de pacientes permitido por licencia
+        # Verificar límite de pacientes
         cursor.execute("SELECT limite_pacientes, rol FROM psicologos WHERE id = ?;", (psi_id,))
         row_psi = cursor.fetchone()
         
@@ -271,7 +318,7 @@ def crear_paciente(p: dict):
             cursor.execute("SELECT COUNT(*) FROM pacientes WHERE psicologo_id = ?;", (psi_id,))
             conteo = cursor.fetchone()[0]
             if conteo >= limite:
-                raise HTTPException(status_code=403, detail=f"Ha alcanzado el límite de {limite} pacientes de su plan. Solicite una ampliación de licencia.")
+                raise HTTPException(status_code=403, detail=f"Ha alcanzado el límite de {limite} pacientes.")
 
         cursor.execute("""
             INSERT INTO pacientes (psicologo_id, primer_apellido, segundo_apellido, primer_nombre, segundo_nombre, sexo, edad, historia_clinica, numero_archivo)
@@ -289,4 +336,4 @@ def crear_paciente(p: dict):
 
 @app.get("/")
 def root():
-    return {"status": "ok", "mensaje": "API de Psicología con Control de Licencias conectada a Turso DB"}
+    return {"status": "ok", "mensaje": "API de Psicología operando correctamente"}
