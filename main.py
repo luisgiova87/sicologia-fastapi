@@ -25,7 +25,6 @@ def inicializar_tablas():
         conn = obtener_conexion()
         cursor = conn.cursor()
 
-        # 1. Tabla Psicólogos / Terapeutas
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS psicologos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,7 +45,6 @@ def inicializar_tablas():
             );
         """)
 
-        # Migraciones
         cursor.execute("PRAGMA table_info(psicologos);")
         columnas = [row[1] for row in cursor.fetchall()]
         if "estado_licencia" not in columnas:
@@ -56,7 +54,6 @@ def inicializar_tablas():
         if "limite_pacientes" not in columnas:
             cursor.execute("ALTER TABLE psicologos ADD COLUMN limite_pacientes INTEGER DEFAULT 9999;")
 
-        # 2. Tabla Pacientes
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS pacientes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,7 +70,6 @@ def inicializar_tablas():
             );
         """)
 
-        # 3. Tabla Sesiones
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS sesiones (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,7 +92,6 @@ def inicializar_tablas():
             );
         """)
 
-        # Admin por defecto
         pass_admin_correcta = encriptar_password("admin123")
         cursor.execute("SELECT id FROM psicologos WHERE usuario = 'admin';")
         row_admin = cursor.fetchone()
@@ -109,8 +104,6 @@ def inicializar_tablas():
             """, (
                 "admin", pass_admin_correcta, "ADMINISTRADOR", "SISTEMA", "ADMIN", "", "0000000000", "admin", "MSP", "0000", "CENTRO SALUD"
             ))
-        else:
-            cursor.execute("UPDATE psicologos SET password = ? WHERE usuario = 'admin';", (pass_admin_correcta,))
 
         conn.commit()
     except Exception as e:
@@ -119,14 +112,6 @@ def inicializar_tablas():
 @app.on_event("startup")
 def startup():
     inicializar_tablas()
-
-@app.get("/api/init-db")
-def endpoint_init_db():
-    try:
-        inicializar_tablas()
-        return {"status": "ok", "mensaje": "Base de datos inicializada correctamente"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 class LoginData(BaseModel):
     usuario: str
@@ -137,7 +122,6 @@ def login(data: LoginData):
     try:
         conn = obtener_conexion()
         cursor = conn.cursor()
-        
         cursor.execute("SELECT id, usuario, password, primer_apellido, segundo_apellido, primer_nombre, segundo_nombre, cedula, rol, estado_licencia, fecha_expiracion, limite_pacientes FROM psicologos WHERE usuario = ?;", (data.usuario.strip(),))
         row = cursor.fetchone()
 
@@ -148,7 +132,7 @@ def login(data: LoginData):
         raw_password = data.password.strip()
         hash_password = encriptar_password(raw_password)
 
-        if db_password == hash_password or db_password == raw_password or data.usuario.strip() == "admin":
+        if db_password == hash_password or db_password == raw_password:
             rol = row[8]
             estado = row[9] or "activo"
             expiracion = row[10] or "2099-12-31"
@@ -156,36 +140,26 @@ def login(data: LoginData):
 
             if rol != "admin":
                 if estado != "activo":
-                    raise HTTPException(status_code=403, detail="Su cuenta se encuentra suspendida o inactiva.")
+                    raise HTTPException(status_code=403, detail="Cuenta suspendida.")
                 try:
                     fecha_exp_obj = datetime.strptime(expiracion, "%Y-%m-%d").date()
                     if date.today() > fecha_exp_obj:
-                        raise HTTPException(status_code=403, detail=f"Su licencia de uso venció el {expiracion}.")
+                        raise HTTPException(status_code=403, detail=f"Licencia vencida el {expiracion}.")
                 except ValueError:
                     pass
 
             return {
-                "id": row[0],
-                "usuario": row[1],
-                "primer_apellido": row[3],
-                "segundo_apellido": row[4],
-                "primer_nombre": row[5],
-                "segundo_nombre": row[6],
-                "cedula": row[7],
-                "rol": rol,
-                "estado_licencia": estado,
-                "fecha_expiracion": expiracion,
-                "limite_pacientes": limite_p
+                "id": row[0], "usuario": row[1], "primer_apellido": row[3], "segundo_apellido": row[4],
+                "primer_nombre": row[5], "segundo_nombre": row[6], "cedula": row[7], "rol": rol,
+                "estado_licencia": estado, "fecha_expiracion": expiracion, "limite_pacientes": limite_p
             }
         else:
             raise HTTPException(status_code=401, detail="Contraseña incorrecta")
-            
     except HTTPException as he:
         raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- ENDPOINTS PSICOLOGOS ---
 @app.get("/psicologos")
 def listar_psicologos():
     try:
@@ -193,16 +167,13 @@ def listar_psicologos():
         cursor = conn.cursor()
         cursor.execute("SELECT id, usuario, primer_apellido, segundo_apellido, primer_nombre, segundo_nombre, cedula, rol, institucion, unicodigo, establecimiento, estado_licencia, fecha_expiracion, limite_pacientes FROM psicologos;")
         rows = cursor.fetchall()
-        
-        lista = []
-        for r in rows:
-            lista.append({
-                "id": r[0], "usuario": r[1], "primer_apellido": r[2], "segundo_apellido": r[3],
-                "primer_nombre": r[4], "segundo_nombre": r[5], "cedula": r[6], "rol": r[7],
-                "institucion": r[8], "unicodigo": r[9], "establecimiento": r[10],
-                "estado_licencia": r[11] or "activo", "fecha_expiracion": r[12] or "2099-12-31",
-                "limite_pacientes": r[13] if r[13] is not None else 9999
-            })
+        lista = [{
+            "id": r[0], "usuario": r[1], "primer_apellido": r[2], "segundo_apellido": r[3],
+            "primer_nombre": r[4], "segundo_nombre": r[5], "cedula": r[6], "rol": r[7],
+            "institucion": r[8], "unicodigo": r[9], "establecimiento": r[10],
+            "estado_licencia": r[11] or "activo", "fecha_expiracion": r[12] or "2099-12-31",
+            "limite_pacientes": r[13] if r[13] is not None else 9999
+        } for r in rows]
         return {"psicologos": lista}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -215,7 +186,7 @@ def obtener_psicologo_por_id(psi_id: int):
         cursor.execute("SELECT id, usuario, primer_apellido, segundo_apellido, primer_nombre, segundo_nombre, cedula, rol, institucion, unicodigo, establecimiento FROM psicologos WHERE id = ?;", (psi_id,))
         r = cursor.fetchone()
         if not r:
-            raise HTTPException(status_code=404, detail="Terapeuta no encontrado")
+            raise HTTPException(status_code=404, detail="No encontrado")
         return {
             "id": r[0], "usuario": r[1], "primer_apellido": r[2], "segundo_apellido": r[3],
             "primer_nombre": r[4], "segundo_nombre": r[5], "cedula": r[6], "rol": r[7],
@@ -224,60 +195,60 @@ def obtener_psicologo_por_id(psi_id: int):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/psicologos")
-def crear_psicologo(p: dict):
-    try:
-        conn = obtener_conexion()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO psicologos (usuario, password, primer_apellido, segundo_apellido, primer_nombre, segundo_nombre, cedula, rol, institucion, unicodigo, establecimiento, estado_licencia, fecha_expiracion, limite_pacientes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            p.get("usuario"), p.get("password"), p.get("primer_apellido"), p.get("segundo_apellido", ""),
-            p.get("primer_nombre"), p.get("segundo_nombre", ""), p.get("cedula"), p.get("rol", "psicologo"),
-            p.get("institucion", ""), p.get("unicodigo", ""), p.get("establecimiento", ""),
-            p.get("estado_licencia", "activo"), p.get("fecha_expiracion", "2099-12-31"), p.get("limite_pacientes", 9999)
-        ))
-        conn.commit()
-        return {"status": "ok"}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
 @app.put("/psicologos/{psi_id}")
 def actualizar_psicologo(psi_id: int, p: dict):
     try:
         conn = obtener_conexion()
         cursor = conn.cursor()
-        
-        campos = []
-        valores = []
+        campos, valores = [], []
         for key in ["usuario", "primer_apellido", "segundo_apellido", "primer_nombre", "segundo_nombre", "cedula", "institucion", "unicodigo", "establecimiento", "estado_licencia", "fecha_expiracion", "limite_pacientes"]:
             if key in p:
                 campos.append(f"{key} = ?")
                 valores.append(p[key])
-        
         if "password" in p and p["password"]:
             campos.append("password = ?")
             valores.append(p["password"])
 
-        if not campos:
-            return {"status": "nada que actualizar"}
-
-        valores.append(psi_id)
-        sql = f"UPDATE psicologos SET {', '.join(campos)} WHERE id = ?;"
-        cursor.execute(sql, tuple(valores))
-        conn.commit()
+        if campos:
+            valores.append(psi_id)
+            cursor.execute(f"UPDATE psicologos SET {', '.join(campos)} WHERE id = ?;", tuple(valores))
+            conn.commit()
         return {"status": "ok"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# --- ENDPOINTS PACIENTES ---
+# CORRECCIÓN DEFINITIVA DE CAMBIO DE CONTRASEÑA
+@app.put("/psicologos/{psi_id}/password")
+def cambiar_password(psi_id: int, data: dict):
+    try:
+        p_act = data.get("password_actual")
+        p_nue = data.get("password_nueva")
+        
+        conn = obtener_conexion()
+        cursor = conn.cursor()
+        cursor.execute("SELECT password FROM psicologos WHERE id = ?;", (psi_id,))
+        row = cursor.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+            
+        db_pass = row[0]
+        if db_pass == p_act or db_pass == encriptar_password(p_act):
+            cursor.execute("UPDATE psicologos SET password = ? WHERE id = ?;", (p_nue, psi_id))
+            conn.commit()
+            return {"status": "ok", "mensaje": "Contraseña actualizada exitosamente"}
+        else:
+            raise HTTPException(status_code=400, detail="La contraseña actual no coincide")
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/pacientes")
 def listar_pacientes(psicologo_id: int, filtro: str = ""):
     try:
         conn = obtener_conexion()
         cursor = conn.cursor()
-        
         if filtro and filtro.strip():
             f = f"%{filtro.strip()}%"
             cursor.execute("""
@@ -293,13 +264,11 @@ def listar_pacientes(psicologo_id: int, filtro: str = ""):
             """, (psicologo_id,))
 
         rows = cursor.fetchall()
-        lista = []
-        for r in rows:
-            lista.append({
-                "id": r[0], "psicologo_id": r[1], "primer_apellido": r[2], "segundo_apellido": r[3],
-                "primer_nombre": r[4], "segundo_nombre": r[5], "sexo": r[6], "edad": r[7],
-                "historia_clinica": r[8], "numero_archivo": r[9]
-            })
+        lista = [{
+            "id": r[0], "psicologo_id": r[1], "primer_apellido": r[2], "segundo_apellido": r[3],
+            "primer_nombre": r[4], "segundo_nombre": r[5], "sexo": r[6], "edad": r[7],
+            "historia_clinica": r[8], "numero_archivo": r[9]
+        } for r in rows]
         return {"pacientes": lista}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -311,16 +280,13 @@ def listar_todos_pacientes():
         cursor = conn.cursor()
         cursor.execute("""
             SELECT p.id, p.primer_apellido, p.segundo_apellido, p.primer_nombre, p.segundo_nombre, p.historia_clinica, p.numero_archivo, psi.usuario as terapeuta
-            FROM pacientes p
-            JOIN psicologos psi ON p.psicologo_id = psi.id;
+            FROM pacientes p JOIN psicologos psi ON p.psicologo_id = psi.id;
         """)
         rows = cursor.fetchall()
-        lista = []
-        for r in rows:
-            lista.append({
-                "id": r[0], "primer_apellido": r[1], "segundo_apellido": r[2], "primer_nombre": r[3],
-                "segundo_nombre": r[4], "historia_clinica": r[5], "numero_archivo": r[6], "terapeuta": r[7]
-            })
+        lista = [{
+            "id": r[0], "primer_apellido": r[1], "segundo_apellido": r[2], "primer_nombre": r[3],
+            "segundo_nombre": r[4], "historia_clinica": r[5], "numero_archivo": r[6], "terapeuta": r[7]
+        } for r in rows]
         return {"pacientes": lista}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -334,13 +300,12 @@ def crear_paciente(p: dict):
 
         cursor.execute("SELECT limite_pacientes, rol FROM psicologos WHERE id = ?;", (psi_id,))
         row_psi = cursor.fetchone()
-        
         if row_psi and row_psi[1] != "admin":
             limite = row_psi[0] if row_psi[0] is not None else 9999
             cursor.execute("SELECT COUNT(*) FROM pacientes WHERE psicologo_id = ?;", (psi_id,))
             conteo = cursor.fetchone()[0]
             if conteo >= limite:
-                raise HTTPException(status_code=403, detail=f"Ha alcanzado el límite de {limite} pacientes de su suscripción.")
+                raise HTTPException(status_code=403, detail=f"Alcanzó el límite de {limite} pacientes de su plan.")
 
         cursor.execute("""
             INSERT INTO pacientes (psicologo_id, primer_apellido, segundo_apellido, primer_nombre, segundo_nombre, sexo, edad, historia_clinica, numero_archivo)
@@ -387,7 +352,6 @@ def eliminar_paciente(paciente_id: int):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# --- ENDPOINTS SESIONES ---
 @app.get("/sesiones")
 def listar_sesiones(paciente_id: int):
     try:
@@ -399,14 +363,12 @@ def listar_sesiones(paciente_id: int):
             WHERE paciente_id = ? ORDER BY id ASC;
         """, (paciente_id,))
         rows = cursor.fetchall()
-        lista = []
-        for r in rows:
-            lista.append({
-                "id": r[0], "paciente_id": r[1], "psicologo_id": r[2], "fecha": r[3], "hora": r[4],
-                "tipo_consulta": r[5], "motivo_consulta": r[6], "antecedentes_personales": r[7],
-                "antecedentes_familiares": r[8], "problema_actual": r[9], "diagnosticos": r[10],
-                "pruebas": r[11], "plan_tratamiento": r[12], "notas_evolucion": r[13], "proxima_cita": r[14]
-            })
+        lista = [{
+            "id": r[0], "paciente_id": r[1], "psicologo_id": r[2], "fecha": r[3], "hora": r[4],
+            "tipo_consulta": r[5], "motivo_consulta": r[6], "antecedentes_personales": r[7],
+            "antecedentes_familiares": r[8], "problema_actual": r[9], "diagnosticos": r[10],
+            "pruebas": r[11], "plan_tratamiento": r[12], "notas_evolucion": r[13], "proxima_cita": r[14]
+        } for r in rows]
         return {"sesiones": lista}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -431,6 +393,28 @@ def crear_sesion(s: dict):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+# NUEVA RUTA PARA MODIFICAR SESIONES
+@app.put("/sesiones/{sesion_id}")
+def actualizar_sesion(sesion_id: int, s: dict):
+    try:
+        conn = obtener_conexion()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE sesiones 
+            SET fecha = ?, hora = ?, tipo_consulta = ?, motivo_consulta = ?, antecedentes_personales = ?, antecedentes_familiares = ?, problema_actual = ?, diagnosticos = ?, pruebas = ?, plan_tratamiento = ?, notas_evolucion = ?, proxima_cita = ?
+            WHERE id = ?;
+        """, (
+            s.get("fecha"), s.get("hora"), s.get("tipo_consulta"), s.get("motivo_consulta"),
+            s.get("antecedentes_personales", ""), s.get("antecedentes_familiares", ""),
+            s.get("problema_actual"), s.get("diagnosticos", "[]"), s.get("pruebas", "[]"),
+            s.get("plan_tratamiento", ""), s.get("notas_evolucion", ""), s.get("proxima_cita", ""),
+            sesion_id
+        ))
+        conn.commit()
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 @app.delete("/sesiones/{sesion_id}")
 def eliminar_sesion(sesion_id: int):
     try:
@@ -444,4 +428,4 @@ def eliminar_sesion(sesion_id: int):
 
 @app.get("/")
 def root():
-    return {"status": "ok", "mensaje": "API de Psicología completa y operativa"}
+    return {"status": "ok", "mensaje": "API de Psicología operando"}
