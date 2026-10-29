@@ -43,12 +43,11 @@ def encriptar_password(password: str) -> str:
     return hashlib.sha256(f"{password}{sal_sistema}".encode('utf-8')).hexdigest()
 
 def enviar_correo_codigo(correo_destino: str, codigo: str):
-    """Función auxiliar para enviar el código por correo electrónico."""
+    """Función auxiliar protegida para enviar el código por correo sin tumbar el servidor."""
     if not SMTP_USER or not SMTP_PASS:
-        raise HTTPException(
-            status_code=500, detail="Servidor SMTP de correo no configurado."
-        )
-    
+        print(f"⚠️ SMTP no configurado. Código generado para {correo_destino}: {codigo}")
+        return
+
     asunto = "Código de Recuperación de Contraseña - Sistema Clínico"
     cuerpo = f"""
     Hola,
@@ -67,11 +66,11 @@ def enviar_correo_codigo(correo_destino: str, codigo: str):
     msg["To"] = correo_destino
 
     try:
-        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
+        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=10) as server:
             server.login(SMTP_USER, SMTP_PASS)
             server.sendmail(SMTP_USER, [correo_destino], msg.as_string())
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al enviar el correo: {str(e)}")
+        print(f"⚠️ Error al enviar correo por SMTP: {e}")
 
 # --- MODELOS DE DATOS (PYDANTIC) ---
 class LoginRequest(BaseModel):
@@ -237,7 +236,6 @@ def inicializar_tablas():
 
     return {"status": "ok", "mensaje": "Base de datos y usuario admin inicializados correctamente"}
 
-
 @app.on_event("startup")
 def startup_event():
     try:
@@ -286,7 +284,6 @@ def solicitar_recuperacion(req: SolicitarRecuperacionRequest):
     if not email:
         raise HTTPException(status_code=400, detail="Este usuario no tiene un correo electrónico registrado")
 
-    # Generar código de 6 dígitos con expiración de 15 minutos
     codigo = str(random.randint(100000, 999999))
     expiracion = (datetime.now() + timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -419,7 +416,6 @@ def listar_pacientes_terapeuta(psicologo_id: int, filtro: Optional[str] = None):
 @app.post("/pacientes")
 def crear_paciente(data: PacienteCreate):
     client = obtener_conexion()
-    # Validar límite de pacientes según la licencia
     res_psi = client.execute("SELECT limite_pacientes FROM psicologos WHERE id = ?;", [data.psicologo_id])
     if res_psi.rows:
         limite = res_psi.rows[0][0] or 100
