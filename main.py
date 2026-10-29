@@ -211,6 +211,53 @@ def login(data: LoginData):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/admin/backup")
+def generar_backup(admin_id: int):
+    try:
+        conn = obtener_conexion()
+        cursor = conn.cursor()
+        cursor.execute("SELECT rol FROM psicologos WHERE id = ?;", (admin_id,))
+        row = cursor.fetchone()
+        if not row or row[0] != "admin":
+            raise HTTPException(status_code=403, detail="Acceso denegado: solo Administrador")
+
+        cursor.execute("SELECT id, usuario, primer_apellido, segundo_apellido, primer_nombre, segundo_nombre, cedula, rol, institucion, unicodigo, establecimiento, email, estado_licencia, fecha_expiracion, limite_pacientes FROM psicologos;")
+        psis = [{
+            "id": r[0], "usuario": r[1], "primer_apellido": r[2], "segundo_apellido": r[3],
+            "primer_nombre": r[4], "segundo_nombre": r[5], "cedula": r[6], "rol": r[7],
+            "institucion": r[8], "unicodigo": r[9], "establecimiento": r[10], "email": r[11],
+            "estado_licencia": r[12], "fecha_expiracion": r[13], "limite_pacientes": r[14]
+        } for r in cursor.fetchall()]
+
+        cursor.execute("SELECT id, psicologo_id, primer_apellido, segundo_apellido, primer_nombre, segundo_nombre, sexo, edad, historia_clinica, numero_archivo FROM pacientes;")
+        pacs = [{
+            "id": r[0], "psicologo_id": r[1], "primer_apellido": r[2], "segundo_apellido": r[3],
+            "primer_nombre": r[4], "segundo_nombre": r[5], "sexo": r[6], "edad": r[7],
+            "historia_clinica": r[8], "numero_archivo": r[9]
+        } for r in cursor.fetchall()]
+
+        cursor.execute("SELECT id, paciente_id, psicologo_id, fecha, hora, tipo_consulta, motivo_consulta, antecedentes_personales, antecedentes_familiares, problema_actual, diagnosticos, pruebas, plan_tratamiento, notas_evolucion, proxima_cita FROM sesiones;")
+        sess = [{
+            "id": r[0], "paciente_id": r[1], "psicologo_id": r[2], "fecha": r[3], "hora": r[4],
+            "tipo_consulta": r[5], "motivo_consulta": r[6], "antecedentes_personales": r[7],
+            "antecedentes_familiares": r[8], "problema_actual": r[9], "diagnosticos": r[10],
+            "pruebas": r[11], "plan_tratamiento": r[12], "notas_evolucion": r[13], "proxima_cita": r[14]
+        } for r in cursor.fetchall()]
+
+        return {
+            "fecha_generacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "total_psicologos": len(psis),
+            "total_pacientes": len(pacs),
+            "total_sesiones": len(sess),
+            "psicologos": psis,
+            "pacientes": pacs,
+            "sesiones": sess
+        }
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/solicitar-recuperacion")
 def solicitar_recuperacion(data: dict):
     try:
@@ -344,15 +391,26 @@ def actualizar_psicologo(psi_id: int, p: dict):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.delete("/psicologos/{psi_id}")
-def eliminar_psicologo(psi_id: int):
+def eliminar_psicologo(psi_id: int, payload: dict):
     try:
+        admin_id = payload.get("admin_id")
+        password_admin = payload.get("password", "").strip()
+
         conn = obtener_conexion()
         cursor = conn.cursor()
+
+        cursor.execute("SELECT password FROM psicologos WHERE id = ?;", (admin_id,))
+        row_admin = cursor.fetchone()
+        if not row_admin or row_admin[0] != encriptar_password(password_admin):
+            raise HTTPException(status_code=401, detail="Contraseña del Administrador incorrecta.")
+
         cursor.execute("DELETE FROM sesiones WHERE psicologo_id = ?;", (psi_id,))
         cursor.execute("DELETE FROM pacientes WHERE psicologo_id = ?;", (psi_id,))
         cursor.execute("DELETE FROM psicologos WHERE id = ?;", (psi_id,))
         conn.commit()
-        return {"status": "ok"}
+        return {"status": "ok", "mensaje": "Terapeuta eliminado con éxito"}
+    except HTTPException as he:
+        raise he
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -479,14 +537,25 @@ def actualizar_paciente(paciente_id: int, p: dict):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.delete("/pacientes/{paciente_id}")
-def eliminar_paciente(paciente_id: int):
+def eliminar_paciente(paciente_id: int, payload: dict):
     try:
+        psi_id = payload.get("psicologo_id")
+        password_psi = payload.get("password", "").strip()
+
         conn = obtener_conexion()
         cursor = conn.cursor()
+
+        cursor.execute("SELECT password FROM psicologos WHERE id = ?;", (psi_id,))
+        row_psi = cursor.fetchone()
+        if not row_psi or row_psi[0] != encriptar_password(password_psi):
+            raise HTTPException(status_code=401, detail="Contraseña incorrecta.")
+
         cursor.execute("DELETE FROM sesiones WHERE paciente_id = ?;", (paciente_id,))
         cursor.execute("DELETE FROM pacientes WHERE id = ?;", (paciente_id,))
         conn.commit()
-        return {"status": "ok"}
+        return {"status": "ok", "mensaje": "Paciente eliminado con éxito"}
+    except HTTPException as he:
+        raise he
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
