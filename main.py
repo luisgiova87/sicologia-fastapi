@@ -13,7 +13,6 @@ from pydantic import BaseModel
 
 app = FastAPI(title="API Sistema Clínico de Psicología")
 
-# Permitir solicitudes CORS desde la app de Streamlit
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,23 +25,30 @@ app.add_middleware(
 TURSO_URL = os.getenv("TURSO_DATABASE_URL", "").replace("https://", "libsql://")
 TURSO_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
 
-# Configuración de correo para recuperación (Gmail SMTP)
+# Configuración SMTP (Gmail)
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
-SMTP_USER = os.getenv("SMTP_USER", "")  # Correo remitente
-SMTP_PASS = os.getenv("SMTP_PASS", "")  # Contraseña de aplicación de Google
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASS = os.getenv("SMTP_PASS", "")
 
 
 def obtener_conexion():
   if not TURSO_URL or not TURSO_TOKEN:
     raise HTTPException(
         status_code=500,
-        detail="Variables de entorno TURSO_DATABASE_URL o TURSO_AUTH_TOKEN no"
-        " configuradas.",
+        detail=(
+            "[ERR_TURSO_00] Variables de entorno TURSO_DATABASE_URL o"
+            " TURSO_AUTH_TOKEN vacías en Vercel."
+        ),
     )
-  return libsql_client.create_client_sync(
-      url=TURSO_URL, auth_token=TURSO_TOKEN
-  )
+  try:
+    return libsql_client.create_client_sync(
+        url=TURSO_URL, auth_token=TURSO_TOKEN
+    )
+  except Exception as e:
+    raise HTTPException(
+        status_code=500, detail=f"[ERR_TURSO_CONN] Fallo conexion Turso: {e}"
+    )
 
 
 def encriptar_password(password: str) -> str:
@@ -51,40 +57,29 @@ def encriptar_password(password: str) -> str:
 
 
 def enviar_correo_codigo(correo_destino: str, codigo: str):
-  """Función auxiliar protegida para enviar el código sin tirar el servidor."""
   if not SMTP_USER or not SMTP_PASS:
     print(
-        "⚠️ SMTP no configurado. Código generado para"
-        f" {correo_destino}: {codigo}"
+        f"⚠️ [SMTP_INFO] Código generado para {correo_destino}: {codigo} (SMTP"
+        " no configurado)"
     )
     return
 
   asunto = "Código de Recuperación de Contraseña - Sistema Clínico"
-  cuerpo = f"""
-    Hola,
-
-    Has solicitado restablecer tu contraseña en el Sistema Clínico de Psicología.
-    Tu código de seguridad temporal es:
-
-    🔑  {codigo}  🔑
-
-    Este código vencerá en 15 minutos. Si no solicitaste este cambio, ignora este mensaje.
-    """
-
+  cuerpo = f"Hola,\n\nTu código de seguridad es: {codigo}\n\nVence en 15 minutos."
   msg = MIMEText(cuerpo, "plain", "utf-8")
   msg["Subject"] = asunto
   msg["From"] = f"Sistema Clínico <{SMTP_USER}>"
   msg["To"] = correo_destino
 
   try:
-    with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=10) as server:
+    with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=8) as server:
       server.login(SMTP_USER, SMTP_PASS)
       server.sendmail(SMTP_USER, [correo_destino], msg.as_string())
   except Exception as e:
-    print(f"⚠️ Error al enviar correo por SMTP: {e}")
+    print(f"⚠️ [SMTP_ERROR] Error enviando correo: {e}")
 
 
-# --- MODELOS DE DATOS (PYDANTIC) ---
+# --- MODELOS ---
 class LoginRequest(BaseModel):
   usuario: str
   password: str
@@ -167,7 +162,7 @@ class SesionCreate(BaseModel):
   proxima_cita: Optional[str] = ""
 
 
-# --- INICIALIZACIÓN DE LA BASE DE DATOS ---
+# --- RUTAS DE INICIALIZACIÓN ---
 @app.get("/")
 def home():
   return {"status": "ok", "mensaje": "API del Sistema Clínico Activa"}
@@ -178,7 +173,6 @@ def inicializar_tablas():
   try:
     client = obtener_conexion()
 
-    # Tabla psicologos
     client.execute("""
         CREATE TABLE IF NOT EXISTS psicologos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -200,7 +194,6 @@ def inicializar_tablas():
         );
         """)
 
-    # Tabla pacientes
     client.execute("""
         CREATE TABLE IF NOT EXISTS pacientes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -217,7 +210,6 @@ def inicializar_tablas():
         );
         """)
 
-    # Tabla sesiones
     client.execute("""
         CREATE TABLE IF NOT EXISTS sesiones (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -240,7 +232,6 @@ def inicializar_tablas():
         );
         """)
 
-    # Tabla codigos_recuperacion
     client.execute("""
         CREATE TABLE IF NOT EXISTS codigos_recuperacion (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -250,7 +241,6 @@ def inicializar_tablas():
         );
         """)
 
-    # Insertar Usuario Administrador Inicial si no existe
     res = client.execute("SELECT COUNT(*) FROM psicologos WHERE usuario = 'admin';")
     if res.rows[0][0] == 0:
       pass_hash = encriptar_password("admin123")
@@ -269,34 +259,30 @@ def inicializar_tablas():
     }
   except Exception as e:
     raise HTTPException(
-        status_code=500,
-        detail=f"Error al inicializar la base de datos: {str(e)}",
+        status_code=500, detail=f"[ERR_INIT_DB] Error al inicializar: {str(e)}"
     )
 
 
-# --- AUTENTICACIÓN Y LOGIN ---
+# --- LOGIN CON IDENTIFICADOR DE ERRORES ---
 @app.post("/login")
 def login(req: LoginRequest):
-  try:
-    client = obtener_conexion()
-    usuario_limpio = req.usuario.strip()
-    pass_enviada = req.password.strip()
-    pass_hash = encriptar_password(pass_enviada)
-    pass_admin_esperada = encriptar_password("admin123")
+  usuario_limpio = req.usuario.strip()
+  pass_enviada = req.password.strip()
+  pass_hash = encriptar_password(pass_enviada)
+  pass_admin_esperada = encriptar_password("admin123")
 
-    # Buscar usuario en Turso DB
-    res = client.execute(
-        "SELECT id, usuario, primer_apellido, segundo_apellido, primer_nombre,"
-        " rol, estado_licencia, fecha_expiracion, limite_pacientes, email,"
-        " password FROM psicologos WHERE usuario = ?;",
-        [usuario_limpio],
-    )
-
-    # Bypass de seguridad para el usuario admin
-    if usuario_limpio == "admin":
-      if pass_enviada in ["admin123", pass_admin_esperada]:
-        if res.rows:
-          r = res.rows[0]
+  # 1. BYPASS DIRECTO DE EMERGENCIA PARA USUARIO ADMIN
+  if usuario_limpio == "admin":
+    if pass_enviada in ["admin123", pass_admin_esperada]:
+      try:
+        client = obtener_conexion()
+        res_adm = client.execute(
+            "SELECT id, usuario, primer_apellido, segundo_apellido,"
+            " primer_nombre, rol, estado_licencia, fecha_expiracion,"
+            " limite_pacientes, email FROM psicologos WHERE usuario = 'admin';"
+        )
+        if res_adm.rows:
+          r = res_adm.rows[0]
           return {
               "id": r[0],
               "usuario": r[1],
@@ -309,55 +295,70 @@ def login(req: LoginRequest):
               "limite_pacientes": r[8],
               "email": r[9],
           }
-        return {
-            "id": 1,
-            "usuario": "admin",
-            "primer_apellido": "ADMINISTRADOR",
-            "segundo_apellido": "SISTEMA",
-            "primer_nombre": "ADMIN",
-            "rol": "admin",
-            "estado_licencia": "activo",
-            "fecha_expiracion": "2099-12-31",
-            "limite_pacientes": 9999,
-            "email": "admin@sistema.ec",
-        }
+      except Exception:
+        pass  # Si falla la consulta a Turso, de todos modos responde con datos admin por defecto
 
-    if not res.rows:
-      raise HTTPException(
-          status_code=401, detail="Usuario o contraseña incorrectos"
-      )
-
-    r = res.rows[0]
-    db_password = r[10]
-
-    # Comprobar coincidencia por Hash o Texto Plano
-    if db_password == pass_hash or db_password == pass_enviada:
       return {
-          "id": r[0],
-          "usuario": r[1],
-          "primer_apellido": r[2],
-          "segundo_apellido": r[3],
-          "primer_nombre": r[4],
-          "rol": r[5],
-          "estado_licencia": r[6],
-          "fecha_expiracion": r[7],
-          "limite_pacientes": r[8],
-          "email": r[9],
+          "id": 1,
+          "usuario": "admin",
+          "primer_apellido": "ADMINISTRADOR",
+          "segundo_apellido": "SISTEMA",
+          "primer_nombre": "ADMIN",
+          "rol": "admin",
+          "estado_licencia": "activo",
+          "fecha_expiracion": "2099-12-31",
+          "limite_pacientes": 9999,
+          "email": "admin@sistema.ec",
       }
-    else:
-      raise HTTPException(
-          status_code=401, detail="Usuario o contraseña incorrectos"
-      )
 
-  except HTTPException as he:
-    raise he
+  # 2. BÚSQUEDA REGULAR CON IDENTIFICADOR DE ERRORES
+  try:
+    client = obtener_conexion()
+    res = client.execute(
+        "SELECT id, usuario, primer_apellido, segundo_apellido, primer_nombre,"
+        " rol, estado_licencia, fecha_expiracion, limite_pacientes, email,"
+        " password FROM psicologos WHERE usuario = ?;",
+        [usuario_limpio],
+    )
   except Exception as e:
     raise HTTPException(
-        status_code=500, detail=f"Error interno en login: {str(e)}"
+        status_code=500, detail=f"[ERR_LOGIN_QUERY] Error consultando Turso: {e}"
+    )
+
+  if not res.rows:
+    raise HTTPException(
+        status_code=401,
+        detail=f"[ERR_LOGIN_01] El usuario '{usuario_limpio}' no existe.",
+    )
+
+  r = res.rows[0]
+  db_password = r[10]
+
+  # Verificar hash o texto plano
+  if db_password == pass_hash or db_password == pass_enviada:
+    return {
+        "id": r[0],
+        "usuario": r[1],
+        "primer_apellido": r[2],
+        "segundo_apellido": r[3],
+        "primer_nombre": r[4],
+        "rol": r[5],
+        "estado_licencia": r[6],
+        "fecha_expiracion": r[7],
+        "limite_pacientes": r[8],
+        "email": r[9],
+    }
+  else:
+    raise HTTPException(
+        status_code=401,
+        detail=(
+            f"[ERR_LOGIN_02] Contraseña incorrecta para '{usuario_limpio}'."
+            f" HashRecibido={pass_hash[:8]}... vs HashDB={db_password[:8]}..."
+        ),
     )
 
 
-# --- RECUPERACIÓN DE CONTRASEÑA POR CORREO ---
+# --- OTROS ENDPOINTS ---
 @app.post("/solicitar-recuperacion")
 def solicitar_recuperacion(req: SolicitarRecuperacionRequest):
   client = obtener_conexion()
@@ -367,14 +368,15 @@ def solicitar_recuperacion(req: SolicitarRecuperacionRequest):
   )
   if not res.rows:
     raise HTTPException(
-        status_code=404, detail="Usuario o correo electrónico no encontrado"
+        status_code=404,
+        detail="[ERR_RECUP_01] Usuario o correo electrónico no encontrado",
     )
 
   usuario, email = res.rows[0][0], res.rows[0][1]
   if not email:
     raise HTTPException(
         status_code=400,
-        detail="Este usuario no tiene un correo electrónico registrado",
+        detail="[ERR_RECUP_02] El usuario no tiene correo registrado",
     )
 
   codigo = str(random.randint(100000, 999999))
@@ -403,7 +405,9 @@ def restablecer_password(req: RestablecerPasswordRequest):
       [req.usuario, req.codigo, ahora],
   )
   if not res.rows:
-    raise HTTPException(status_code=400, detail="Código inválido o expirado")
+    raise HTTPException(
+        status_code=400, detail="[ERR_RESET_01] Código inválido o expirado"
+    )
 
   nueva_pass_hash = encriptar_password(req.nueva_password)
   client.execute(
@@ -417,11 +421,12 @@ def restablecer_password(req: RestablecerPasswordRequest):
   return {"status": "ok", "mensaje": "Contraseña restablecida con éxito"}
 
 
-# --- RUTA DE RESCATE ADMINISTRADOR ---
 @app.get("/api/rescue-admin")
 def rescue_admin(clave_secreta: str):
   if clave_secreta != "MI_CLAVE_DE_RESCATE_2026":
-    raise HTTPException(status_code=403, detail="Clave de rescate incorrecta")
+    raise HTTPException(
+        status_code=403, detail="[ERR_RESCUE] Clave de rescate incorrecta"
+    )
 
   client = obtener_conexion()
   nueva_pass_hash = encriptar_password("admin123")
@@ -435,7 +440,6 @@ def rescue_admin(clave_secreta: str):
   }
 
 
-# --- GESTIÓN DE TERAPEUTAS / PSICÓLOGOS ---
 @app.get("/psicologos")
 def listar_psicologos():
   client = obtener_conexion()
@@ -568,7 +572,6 @@ def cambiar_password(psi_id: int, data: PasswordChange):
   return {"status": "ok", "mensaje": "Contraseña actualizada exitosamente"}
 
 
-# --- GESTIÓN DE PACIENTES ---
 @app.get("/pacientes/todos")
 def listar_todos_pacientes():
   client = obtener_conexion()
@@ -698,7 +701,6 @@ def eliminar_paciente(pac_id: int):
   return {"status": "ok", "mensaje": "Paciente y sus sesiones eliminados"}
 
 
-# --- GESTIÓN DE SESIONES / EVOLUCIONES ---
 @app.get("/sesiones")
 def listar_sesiones(paciente_id: int):
   client = obtener_conexion()
