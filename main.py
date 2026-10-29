@@ -195,6 +195,25 @@ def obtener_psicologo_por_id(psi_id: int):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/psicologos")
+def crear_psicologo(p: dict):
+    try:
+        conn = obtener_conexion()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO psicologos (usuario, password, primer_apellido, segundo_apellido, primer_nombre, segundo_nombre, cedula, rol, institucion, unicodigo, establecimiento, estado_licencia, fecha_expiracion, limite_pacientes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            p.get("usuario"), p.get("password"), p.get("primer_apellido"), p.get("segundo_apellido", ""),
+            p.get("primer_nombre"), p.get("segundo_nombre", ""), p.get("cedula"), p.get("rol", "psicologo"),
+            p.get("institucion", ""), p.get("unicodigo", ""), p.get("establecimiento", ""),
+            p.get("estado_licencia", "activo"), p.get("fecha_expiracion", "2099-12-31"), p.get("limite_pacientes", 9999)
+        ))
+        conn.commit()
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 @app.put("/psicologos/{psi_id}")
 def actualizar_psicologo(psi_id: int, p: dict):
     try:
@@ -426,4 +445,4 @@ def eliminar_sesion(sesion_id: int):
 
 @app.get("/")
 def root():
-    return {"status": "ok", "mensaje": "API de Psicología operando"}
+    return {"status": "ok", "mensaje": "API de Psicología operando correctamente"}
